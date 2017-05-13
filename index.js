@@ -204,23 +204,29 @@ class ASyncIterator extends Array {
 
         if (options.sync) {
 
-            function noop() {
-                
-            }
+            var noop = function noop(passed) {
+                if (passed === false) {
+                    index--;
+                    this.splice(index,1);
+                    
+                }
+            }.bind(this);
             
-            while (index < this.length) {
+            while (index < this.length && index > -1 && this.length > 0) {
 
-                callback(this[index], noop);
+                item = this[index];
                 index++;
+                callback(item, noop);
+
             }
 
             callback(null);
 
         } else {
 
-            var next = function() {
+            var next = function eachNext() {
 
-                if (index >= this.length) {
+                if (index >= this.length || this.length === 0 || index < 0) {
                     return callback(null);
                 }
 
@@ -230,9 +236,13 @@ class ASyncIterator extends Array {
                 
             }.bind(this);
 
-            function cont() {
+            var cont = function eachCont(passed) {
+                if (passed === false) {
+                    index--;
+                    this.splice(index,1);
+                }
                 repeater(next);
-            }
+            }.bind(this);
             
             cont();
 
@@ -265,7 +275,7 @@ class ASyncIterator extends Array {
 
         } else {
 
-            var next = function() {
+            var next = function reverseEachNext() {
 
                 if (index < 0) {
                     return callback(null);
@@ -302,12 +312,12 @@ class Stack extends ASyncIterator {
 
 global._CLM012 = global._CLM012 || {};
 
-function getCreateLocation(fullPath, options) {
+function getCreateStat(fullPath, options) {
 
     var location = _CLM012[fullPath];
 
     if (!location) {
-        location = _CLM012[fullPath] = new Location(fullPath);
+        location = _CLM012[fullPath] = new Stat(fullPath);
     } else {
         location.update(options);
     }
@@ -316,7 +326,7 @@ function getCreateLocation(fullPath, options) {
 
 }
 
-class Location {
+class Stat {
 
     constructor(location, dontUpdate) {
 
@@ -399,9 +409,9 @@ class Location {
             var subitem = list[i];
             var fullpath = join(this.location, subitem);
 
-            var subitemLocation = getCreateLocation(fullpath, options);
+            var subitemStat = getCreateStat(fullpath, options);
 
-            this.children.push(subitemLocation);
+            this.children.push(subitemStat);
 
         }
 
@@ -417,7 +427,7 @@ class Location {
             return cloneHash[this.location];
         }
 
-        var location = new Location("", true);
+        var location = new Stat("", true);
         for (var k in this) {
 
             if (k === "children") {
@@ -445,12 +455,12 @@ class Location {
 
     walk(selected, options, callback) {
 
-        return new Promise(function collatePromise(resolve, reject) {
+        return new Promise(function walkPromise(resolve, reject) {
 
-            var location = getCreateLocation(selected.at, options);
+            var location = getCreateStat(selected.at, options);
 
             var stack = new Stack(location);
-            var walked = new Locations();
+            var walked = new Stats();
             var parentDirs = {};
 
             stack.each(function stackNext(item, next) {
@@ -473,11 +483,11 @@ class Location {
                 var children = item.getChildren(options);
                 for (var i = 0, l = children.length; i < l; i++) {
 
-                    var subitemLocation = children[i];
-                    var relativePath = relative(subitemLocation.location, selected.at);
+                    var subitemStat = children[i];
+                    var relativePath = relative(subitemStat.location, selected.at);
 
                     var isMatched = selected.match(relativePath);
-                    var capture = (subitemLocation.isDir && options.dirs) || (subitemLocation.isFile && options.files);
+                    var capture = (subitemStat.isDir && options.dirs) || (subitemStat.isFile && options.files);
 
                     switch (isMatched) {
                         case 2:
@@ -486,14 +496,14 @@ class Location {
                                 walked.push(item);
                             }
                             if (capture) {
-                                walked.push(subitemLocation);
-                                if (options.includeParentDirs && subitemLocation.isDir && !parentDirs[subitemLocation.location]) {
-                                    parentDirs[subitemLocation.location] = true;
+                                walked.push(subitemStat);
+                                if (options.includeParentDirs && subitemStat.isDir && !parentDirs[subitemStat.location]) {
+                                    parentDirs[subitemStat.location] = true;
                                 }
                             }
                         case 1:
-                            if (subitemLocation.isDir) {
-                                stack.push(subitemLocation);
+                            if (subitemStat.isDir) {
+                                stack.push(subitemStat);
                             }
                     }
 
@@ -510,7 +520,7 @@ class Location {
 
 }
 
-class Locations extends ASyncIterator {
+class Stats extends ASyncIterator {
 
     constructor(selector) {
         super();
@@ -532,7 +542,7 @@ class Locations extends ASyncIterator {
 
         var cloneHash = {};
 
-        var clone = new Locations(this.selector);
+        var clone = new Stats(this.selector);
         for (var i = 0, l = this.length; i < l; i++) {
             clone.push(this[i].clone(cloneHash));
         }
@@ -552,7 +562,7 @@ class Locations extends ASyncIterator {
 
 }
 
-class Selected extends Array {
+class Selection extends Array {
 
     constructor(globs, at, pwd) {
 
@@ -571,7 +581,7 @@ class Selected extends Array {
         this.push.apply(this, makeArray(globs));    
         this.at = absolute(at, pwd);
 
-        this.location = new Location(this.at);  
+        this.location = new Stat(this.at);  
 
         this.update();
 
@@ -711,10 +721,14 @@ class Selected extends Array {
 
     }
 
-    copyTo(to, options) {
+    copy(to, options) {
         
         var options = parseArguments(arguments, ["to", "options"]);
         options = defaults(options, {
+            overwriteOlder: true,
+            overwriteSame: false,
+            overwriteNewer: false,
+            forceOverwrite: false,
             files: true, 
             dirs: true,
             includeParentDirs: true,
@@ -734,15 +748,28 @@ class Selected extends Array {
                 var relativeDir = relative(item.location, this.at);
                 var toDestination = join( options.to, relativeDir );
 
-                var existing = new Location(toDestination)
-                if (existing.mtime >= item.mtime && existing.size === item.size) return next();
+                if (!options.forceOverwrite) {
+                    var existing = new Stat(toDestination);
+                    if (existing.exists) {
+                        var isNewer = (existing.mtime > item.mtime);
+                        var isSame = (existing.mtime === item.mtime && existing.size === item.size);
+                        var isOlder = (existing.mtime < item.mtime);
+                        if (isNewer && !options.overwriteNewer) {
+                            return next(false);
+                        } else if (isSame && !options.overwriteSame) {
+                            return next(false);
+                        } else if (isOlder && !options.overwriteOlder) {
+                            return next(false);
+                        }
+                    }
+                }
 
                 if (item.isDir) {
                     mkdir(toDestination, this.at);
-                    next();
+                    return next();
                 } else if (options.sync || options.syncCopy) {
                     fs.writeFileSync(toDestination, fs.readFileSync(item.location));
-                    next();
+                    return next();
                 } else {
                     var read = fs.createReadStream(item.location);
                     read.on("error", function(err) {
@@ -764,10 +791,14 @@ class Selected extends Array {
 
     }
 
-    collateTo(on, to, options) {
+    collate(on, to, options) {
 
         var options = parseArguments(arguments, ["on", "to", "options"]);
         options = defaults(options, {
+            overwriteOlder: true,
+            overwriteSame: false,
+            overwriteNewer: false,
+            forceOverwrite: false,
             file: true,
             dirs: true,
             includeParentDirs: true,
@@ -787,31 +818,40 @@ class Selected extends Array {
                     return resolve(locations);
                 }
 
-                var relativeLocation = relative(item.location, this.at);
-                var lastIndexOccurance = relativeLocation.lastIndexOf(options.on);
+                var relativeStat = relative(item.location, this.at);
+                var lastIndexOccurance = relativeStat.lastIndexOf(options.on);
                 if (lastIndexOccurance === -1) {
-                    return next();
+                    return next(false);
                 }
-                var truncated = relativeLocation.substr(relativeLocation.lastIndexOf(options.on)+options.on.length);
-                if (!truncated) {
-                    return next();
-                }
+
+                var truncated = relativeStat.substr(relativeStat.lastIndexOf(options.on)+options.on.length);
                 var toDestination = join( options.to, truncated );
 
-                var existing = new Location(toDestination)
-                if (existing.mtime >= item.mtime && existing.size === item.size) {
-                    return next();
+                if (!options.forceOverwrite) {
+                    var existing = new Stat(toDestination);
+                    if (existing.exists) {
+                        var isNewer = (existing.mtime > item.mtime);
+                        var isSame = (existing.mtime === item.mtime && existing.size === item.size);
+                        var isOlder = (existing.mtime < item.mtime);
+                        if (isNewer && !options.overwriteNewer) {
+                            return next(false);
+                        } else if (isSame && !options.overwriteSame) {
+                            return next(false);
+                        } else if (isOlder && !options.overwriteOlder) {
+                            return next(false);
+                        }
+                    }
                 }
 
                 if (item.isDir) {
 
                     mkdir(toDestination, this.at);
-                    next();
+                    return next();
 
                 } else if (options.sync || options.syncCopy) {
 
                     fs.writeFileSync(toDestination, fs.readFileSync(item.location));
-                    next();
+                    return next();
 
                 } else {
 
@@ -836,7 +876,7 @@ class Selected extends Array {
 
     }
 
-    deleteAll(options) {
+    delete(options) {
 
         var options = parseArguments(arguments, ["options"]);
         options = defaults(options, {
@@ -846,7 +886,7 @@ class Selected extends Array {
             timestamp: Date.now()
         });
 
-        return this.location.walk(this, options, function deleteAllWalked(resolve, reject, locations) {
+        return this.location.walk(this, options, function deleteWalked(resolve, reject, locations) {
 
             locations.reverseEach(function deletesNext(item, next) {
 
@@ -894,34 +934,34 @@ class Selected extends Array {
 
 }
 
-var api = function Selectors(globs, at, pwd) { 
-    return new Selected(globs, at, pwd); 
+var api = function Selection(globs, at, pwd) { 
+    return new Selection(globs, at, pwd); 
 };
 
 api.mkdir = mkdir;
-api.absolute = absolute;
-api.relative = relative;
+api.abs = absolute;
+api.rel = relative;
 api.home = home;
 api.cwd = cwd;
-api.normalize = normalize;
+api.norm = api.normalize = normalize;
 api.join = join;
-api.location = getCreateLocation;
+api.stat = getCreateStat;
 
 api.stats = function(options) {
-    var selector = new Selected(options);
+    var selector = new Selection(options);
     return selector.stats(options);
 };
-api.collateTo = function(options) {
-    var selector = new Selected(options);
-    return selector.collateTo(options);
+api.collate = function(options) {
+    var selector = new Selection(options);
+    return selector.collate(options);
 };
-api.copyTo = function(options) {
-    var selector = new Selected(options);
-    return selector.copyTo(options);
+api.copy = function(options) {
+    var selector = new Selection(options);
+    return selector.copy(options);
 };
-api.deleteAll = function(options) {
-    var selector = new Selected(options);
-    return selector.deleteAll(options);
+api.delete = function(options) {
+    var selector = new Selection(options);
+    return selector.delete(options);
 };
 
 module.exports = api;

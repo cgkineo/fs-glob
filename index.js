@@ -1,5 +1,7 @@
 "use strict";
 
+global._CLM012 = global._CLM012 || { stats : {}, watches: [] };
+
 var osenv = require("osenv");
 var path = require("path");
 var fs = require("fs");
@@ -311,14 +313,12 @@ class Stack extends ASyncIterator {
 
 }
 
-global._CLM012 = global._CLM012 || {};
-
 function getCreateStat(location, options) {
 
-    var stat = _CLM012[location];
+    var stat = _CLM012.stats[location];
 
     if (!stat) {
-        stat = _CLM012[location] = new Stat(location);
+        stat = _CLM012.stats[location] = new Stat(location);
     } else {
         stat.update(options);
     }
@@ -353,7 +353,7 @@ class Stat {
 
     update(options) {
 
-        if (options && !options.updateStat && this.timestamp) {
+        if (options && !options.updateStat && this.timestamp && eval(options.updateStatOn) < this.timestamp) {
             return;
         }
 
@@ -397,7 +397,7 @@ class Stat {
             return this.children = null;
         }
 
-        if (options && !options.updateStat && this.children) {
+        if (options && !options.updateStat && this.children && eval(options.updateStatOn) < this.timestamp) {
             return this.children;
         }
 
@@ -563,13 +563,26 @@ class Stats extends ASyncIterator {
 
 }
 
+var watchIntervalHandle = null;
 function registerWatch(selector) {
 
-    
+
 
 }
 
 function unregisterWatch(selector) {
+
+
+
+}
+
+function pauseWatch(selector) {
+
+
+
+}
+
+function playWatch(selector) {
 
 
 
@@ -937,16 +950,49 @@ class Selection extends Array {
     }
 
     watch(callback, options) {
+
+        if (!arguments.length) {
+            playWatch(this);
+            return this;
+        }
         
         this.watches = this.watches || [];
 
         for (var i = 0, l = this.watches.length; i < l; i++) {
-            if (this.watches === callback) return this;
+            if (this.watches[i].callback === callback) {
+                this.watches[i].paused = false;
+                return this;
+            }
         }
 
-        this.watches.push(callback);
+        this.watches.push({
+            paused: false,
+            callback: callback
+        });
 
         registerWatch(this);
+
+        return this;
+
+    }
+
+    pause(callback) {
+
+        if (!callback) {
+            pauseWatch(this);
+            return this;
+        }
+
+        if (!this.watches) {
+            return this;
+        }
+
+        for (var i = 0, l = this.watches.length; i < l; i++) {
+            if (this.watches[i].callback === callback) {
+                this.watches[i].paused = true;
+                return this;
+            }
+        }
 
         return this;
 
@@ -963,7 +1009,7 @@ class Selection extends Array {
         }
 
         for (var i = 0, l = this.watches.length; i < l; i++) {
-            if (this.watches === callback) {
+            if (this.watches[i].callback === callback) {
                 this.watches.splice(i,1);
                 break;
             }
@@ -1006,9 +1052,17 @@ api.delete = function(options) {
     return (new Selection(options)).delete(options);
 };
 api.watch = function(options, callback) {
+    if (!arguments.length) {
+        playWatch();
+        return;
+    }
+
     return (new Selection(options)).watch(callback, options);
 };
-api.stopAll = function() {
+api.pause = function() {
+    pauseWatch();
+};
+api.stop = function() {
     unregisterWatch();  
 };
 

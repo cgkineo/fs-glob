@@ -7,101 +7,18 @@ var path = require("path");
 var fs = require("fs");
 var minimatch = require("minimatch");
 var handlebars = require("handlebars");
+const EventEmitter = require('events');
 
-var repeaterSkip = 0;
-var repeater = function repeater(next) {
-    if (repeaterSkip >= 100) {
-        repeaterSkip = 0;
+function repeater(next) {
+    if (repeater.skip >= 100) {
+        repeater.skip = 0;
         process.nextTick(next);
     } else {
-        repeaterSkip++;
+        repeater.skip++;
         next();
     }
 }
-
-function normalize(location) {
-    return path.posix.normalize(posix(location));
-}
-
-function join() {
-    return path.posix.join.apply(path.posix.join, arguments);
-}
-
-function cwd() {
-    var cwd = process.cwd();
-    return posix(cwd);
-}
-
-function home() {
-    var home = osenv.home();
-    return posix(home);
-}
-
-function mkdir(location, pwd) {
-
-    location = absolute(location, pwd);
-
-    var parts = location.split("/");
-    for (var i = 0, l = parts.length; i < l; i++) {
-        var fullpath = parts.slice(0, i+1).join("/");
-        if (fs.existsSync(fullpath)) {
-            continue;
-        }
-        fs.mkdirSync(fullpath, 0o777);
-    }
-
-    return this;
-
-}
-
-//translate relative paths to absolute paths
-function absolute(location, pwd) {
-
-    //if no location defined, assume cwd
-    pwd = normalize(pwd || "");
-    switch (pwd) {
-        case ".": case "./":
-            pwd = cwd(); 
-    }
-
-    location = posix(location || "");
-    if (location === "") {
-        return pwd;
-    }
-    location = location + "";
-
-    var firstCharacter = location.substr(0,1);
-    var secondCharacter = location.substr(1,1);
-
-    //take into consideration the ~ home variable
-    if (firstCharacter === "~") {
-        location = join( home(), location.substr(1));
-    }
-
-    var firstCharacter = location.substr(0,1);
-    var secondCharacter = location.substr(1,1);
-    
-    //if path is absolute or contains windows drive separator
-    if (firstCharacter === "/" || secondCharacter === ":") {
-        return normalize(location);
-    }
-    
-    //if path is not absolute
-    return join(pwd, location);
-
-}
-
-function relative(location, pwd) {
-    location = absolute(location);
-    pwd = absolute(pwd);
-    var relative =  location.substr(pwd.length);
-    if (relative[0] === "/") relative = relative.substr(1);
-    return relative;
-}
-
-function posix(location) {
-    return location.replace(/\\/g, "/");
-}
+repeater.skip = 0;
 
 function makeArray(value) {
     if (value instanceof  Array) {
@@ -127,10 +44,10 @@ function unique(arr) {
 function difference(arr1, arr2) {
     var unique = {};
     for (var i = 0, l = arr1.length; i < l; i++) {
-        unique[arr1[i]] = true;
+        unique[arr1[i]] = 1;
     }
     for (var i = 0, l = arr2.length; i < l; i++) {
-        unique[arr2[i]] = (unique[arr2[i]] === undefined) ? true : false;
+        unique[arr2[i]] = (unique[arr2[i]] === undefined) ? 2 : 0;
     }
     var difference = [];
     for (var k in unique) {
@@ -139,6 +56,49 @@ function difference(arr1, arr2) {
         }
     }
     return difference;
+}
+
+function groupby(arr, name) {
+    var grouped = {};
+    for (var i = 0, l = arr.length; i < l; i++) {
+        grouped[arr[i][name]] = arr[i];
+    }
+    return grouped;
+}
+
+function leftright(hash1, hash2, compare) {
+
+    var unique = {};
+    for (var k in hash1) {
+        // potentially unique to left
+        unique[k] = -1;
+    }
+    for (var k in hash2) {
+        if (unique[k]) {
+            var comparison = compare(hash1[k], hash2[k]);
+            if (comparison === 0) {
+                unique[k] = 0; // same, ignore
+            } else if (comparison < 0) {
+                unique[k] = -2; // left is more
+            } else {
+                unique[k] = 2 // right is more
+            }
+            continue;
+        }
+        // unique to right
+        unique[k] = 1;
+    }
+
+    var leftright = {};
+    var count = 0;
+    for (var k in unique) {
+        if (unique[k]) {
+            count++;
+            leftright[k] = unique[k];
+        }
+    }
+    return !count ? null : leftright;
+
 }
 
 function defaults(options, defaults) {
@@ -190,6 +150,31 @@ function parseArguments(args, names) {
 
 }
 
+function extend() {
+
+    if (!arguments[0]) return arguments[0];
+
+    for (var i = 1, l = arguments.length; i < l; i++) {
+        if (!arguments[i]) continue;
+        for (var k in arguments[i]) {
+            arguments[0][k] = arguments[i][k];
+        }
+    }
+
+    return arguments[0];
+
+}
+
+function debounce(callback, timeout) {
+
+    var handle = null;
+    return function debounced() {
+        clearTimeout(handle);
+        handle = setTimeout(callback, timeout);
+    };
+
+}
+
 class ASyncIterator extends Array {
 
     constructor() {
@@ -207,20 +192,24 @@ class ASyncIterator extends Array {
 
         if (options.sync) {
 
+            var cont = true;
+
             var noop = function noop(passed) {
                 if (passed === false) {
                     index--;
                     this.splice(index,1);
                     
                 }
+                cont = true;
             }.bind(this);
             
-            while (index < this.length && index > -1 && this.length > 0) {
+            while (cont && index < this.length && index > -1 && this.length > 0) {
 
                 item = this[index];
                 index++;
+                cont = false;
                 callback(item, noop);
-
+                
             }
 
             callback(null);
@@ -240,11 +229,13 @@ class ASyncIterator extends Array {
             }.bind(this);
 
             var cont = function eachCont(passed) {
+
                 if (passed === false) {
                     index--;
                     this.splice(index,1);
                 }
                 repeater(next);
+
             }.bind(this);
             
             cont();
@@ -266,21 +257,34 @@ class ASyncIterator extends Array {
 
         if (options.sync) {
 
-            function noop() {}
-            
-            while (index > -1) {
+            var cont = true;
 
-                callback(this[index], noop);
+            var noop = function noop(passed) {
+                if (passed === false) {
+                    index++;
+                    this.splice(index,1);
+                    
+                }
+                cont = true;
+            }.bind(this);
+            
+            while (cont && index > -1 && index > -1 && this.length > 0) {
+
+                item = this[index];
                 index--;
+                cont = false;
+                callback(item, noop);
+
             }
 
             callback(null);
+
 
         } else {
 
             var next = function reverseEachNext() {
 
-                if (index < 0) {
+                if (index < 0 || this.length === 0 || index >= this.length) {
                     return callback(null);
                 }
 
@@ -290,9 +294,15 @@ class ASyncIterator extends Array {
 
             }.bind(this);
 
-            function cont() {
+            var cont = function eachCont(passed) {
+
+                if (passed === false) {
+                    index++;
+                    this.splice(index,1);
+                }
                 repeater(next);
-            }
+
+            }.bind(this);
             
             cont();
 
@@ -313,27 +323,13 @@ class Stack extends ASyncIterator {
 
 }
 
-function getCreateStat(location, options) {
-
-    var stat = _CLM012.stats[location];
-
-    if (!stat) {
-        stat = _CLM012.stats[location] = new Stat(location);
-    } else {
-        stat.update(options);
-    }
-
-    return stat;
-
-}
-
 class Stat {
 
     constructor(location, dontUpdate) {
 
         if (dontUpdate) return;
 
-        this.location = absolute(location);
+        this.location = api.abs(location);
 
         this.update();
 
@@ -358,6 +354,7 @@ class Stat {
         }
 
         this.timestamp = Date.now();
+        this.children = null;
 
         if (!fs.existsSync(this.location)) {
 
@@ -373,9 +370,9 @@ class Stat {
 
             var stat = fs.statSync(this.location);
 
-            this.birthtime = stat.birthtime;
-            this.ctime = stat.ctime;
-            this.mtime = stat.mtime;
+            this.birthtime = stat.birthtime.getTime();
+            this.ctime = stat.ctime.getTime();
+            this.mtime = stat.mtime.getTime();
             this.size = stat.size;
             this.exists = true;
 
@@ -408,9 +405,9 @@ class Stat {
         for (var i = 0, l = list.length; i < l; i++) {
 
             var subitem = list[i];
-            var fullpath = join(this.location, subitem);
+            var fullpath = api.join(this.location, subitem);
 
-            var subitemStat = getCreateStat(fullpath, options);
+            var subitemStat = api.stat(fullpath, options);
 
             this.children.push(subitemStat);
 
@@ -458,7 +455,7 @@ class Stat {
 
         return new Promise(function walkPromise(resolve, reject) {
 
-            var stat = getCreateStat(selected.location, options);
+            var stat = api.stat(selected.location, options);
 
             var stack = new Stack(stat);
             var walked = new Stats(selected);
@@ -469,7 +466,7 @@ class Stat {
                 if (!item) {
 
                     if (!callback) {
-                        resolve(walked);
+                        resolve(walked.clone());
                     } else {
                         callback(resolve, reject, walked);
                     }
@@ -485,7 +482,7 @@ class Stat {
                 for (var i = 0, l = children.length; i < l; i++) {
 
                     var subitemStat = children[i];
-                    var relativePath = relative(subitemStat.location, selected.location);
+                    var relativePath = api.rel(subitemStat.location, selected.location);
 
                     var isMatched = selected.match(relativePath);
                     var capture = (subitemStat.isDir && options.dirs) || (subitemStat.isFile && options.files);
@@ -563,28 +560,199 @@ class Stats extends ASyncIterator {
 
 }
 
-var watchIntervalHandle = null;
-function registerWatch(selector) {
+class Watches extends ASyncIterator {
 
+    constructor() {
+        super();
 
+        this.handle = null;
+        this.inWatch = false;
+        this.onInterval = this.onInterval.bind(this);
 
-}
+    }
 
-function unregisterWatch(selector) {
+    register(selector) {
 
+        for (var i = 0, l = this.length; i < l; i++) {
+            if (this[i].selector === selector) {
+                return this;
+            }
+        }
 
+        var item = {
+            parent: this,
+            selector: selector,
+            paused: false,
+            changed: [],
+            deleted: [],
+            added: []
+        };
+        item.trigger = debounce(function trigger() {
 
-}
+            this.inWatch = true;
+            clearInterval(this.parent.handle);
+            this.parent.handle = null;
 
-function pauseWatch(selector) {
+            this.selector.watches.each(function(watch, nextWatch) {
 
+                if (!watch) {
+                    this.changed.length = 0;
+                    this.deleted.length = 0;
+                    this.added.length = 0;
+                    return;
+                }
 
+                watch.callback({
+                    changed: this.changed,
+                    delete: this.deleted,
+                    added: this.added
+                });
 
-}
+                nextWatch();
 
-function playWatch(selector) {
+            }.bind(this));
 
+            if (!this.parent.handle) {
+                this.parent.handle = setInterval(this.parent.onInterval, 2000);
+            }
 
+        }.bind(item), 3000);
+
+        this.push(item);
+
+        if (!this.handle && !this.inWatch) {
+            this.handle = setInterval(this.onInterval, 2000);
+        }
+
+    }
+
+    unregister(selector) {
+
+        if (!selector) {
+            this.length = 0;
+            clearInterval(this.handle);
+            this.handle = null;
+            return this;
+        }
+
+        for (var i = 0, l = this.length; i < l; i++) {
+            if (this[i].selector === selector) {
+                this.splice(i,1);
+                if (this.length === 0) {
+                    clearInterval(this.handle);
+                    this.handle = null;
+                }
+                return this;
+            }
+        }
+
+        return this;
+
+    }
+
+    pause(selector) {
+
+        if (!selected) {
+            for (var i = 0, l = this.length; i < l; i++) {
+                this[i].paused = true;
+            }
+            return this;
+        }
+
+        for (var i = 0, l = this.length; i < l; i++) {
+            if (this[i].selector === selector) {
+                this[i].paused = true;
+                return this;
+            }
+        }
+
+        return this;
+
+    }
+
+    play(selector) {
+
+        if (!selected) {
+            for (var i = 0, l = this.length; i < l; i++) {
+                this[i].paused = false;
+            }
+            return this;
+        }
+
+        for (var i = 0, l = this.length; i < l; i++) {
+            if (this[i].selector === selector) {
+                this[i].paused = false;
+                return this;
+            }
+        }
+
+        return this;
+
+    }
+
+    onInterval() {
+
+        var options = {
+            sync: true,
+            updateStatOn: "Date.now() - 1500"
+        };
+
+        this.each(function(item, nextSelector) {
+
+            if (!item) {
+                return;
+            }
+
+            item.selector.stats(options)
+            .then(function(stats) {
+
+                if (!item.previous) {
+                    item.previous = groupby(stats, "location");
+                    return nextSelector();
+                }
+
+                var groupedStats = groupby(stats, "location");
+
+                var lr = leftright(item.previous, groupedStats, function(a, b) {
+                    var parsed = path.parse(a.location);
+                    if (b.mtime === a.mtime) {
+                        return 0;
+                    }
+                    var isBNewer = (b.mtime > a.mtime);
+                    if (isBNewer) return 1;
+                    return -1;
+                });
+
+                if (!lr) {
+                    item.previous = groupedStats;
+                    return nextSelector();
+                }
+
+                for (var k in lr) {
+                    switch (lr[k]) {
+                    case 2: case -2:
+                        item.changed.push(groupedStats[k]);
+                        break;
+                    case -1:
+                        item.deleted.push(item.previous[k]);
+                        break;
+                    case 1:
+                        item.added.push(groupedStats[k]);
+                        break;
+                    }
+                }
+
+                item.previous = groupedStats;
+                
+                item.trigger();
+
+                nextSelector();
+
+            }.bind(this));
+
+        }.bind(this), options);
+
+    }
 
 }
 
@@ -598,8 +766,8 @@ class Selection extends Array {
         this.globs = makeArray(options.globs);
         this.expand = options.expand || null;
 
-        var pwd = absolute(options.pwd);
-        this.location = absolute(options.location, pwd);
+        var pwd = api.abs(options.pwd);
+        this.location = api.abs(options.location, pwd);
         this.stat = new Stat(this.location);  
 
         this.update();
@@ -766,13 +934,15 @@ class Selection extends Array {
             overwriteOlder: true,
             overwriteSame: false,
             overwriteNewer: false,
-            forceOverwrite: false,
+            force: false,
             files: true, 
             dirs: true,
             includeParentDirs: true,
             timestamp: Date.now()
         });
-        options.to = absolute(options.to, this.location);
+
+        options.to = api.abs(options.to, this.location);
+        api.mkdir(options.to);
 
         return this.stat.walk(this, options, function copyWalked(resolve, reject, stats) {
 
@@ -783,10 +953,10 @@ class Selection extends Array {
                     return;
                 }
 
-                var relativeDir = relative(item.location, this.location);
-                var toDestination = join( options.to, relativeDir );
+                var relativeDir = api.rel(item.location, this.location);
+                var toDestination = api.join( options.to, relativeDir );
 
-                if (!options.forceOverwrite) {
+                if (!options.force) {
                     var existing = new Stat(toDestination);
                     if (existing.exists) {
                         var isNewer = (existing.mtime > item.mtime);
@@ -803,7 +973,7 @@ class Selection extends Array {
                 }
 
                 if (item.isDir) {
-                    mkdir(toDestination, this.location);
+                    api.mkdir(toDestination, this.location);
                     return next();
                 } else if (options.sync || options.syncCopy) {
                     fs.writeFileSync(toDestination, fs.readFileSync(item.location));
@@ -836,17 +1006,20 @@ class Selection extends Array {
             overwriteOlder: true,
             overwriteSame: false,
             overwriteNewer: false,
-            forceOverwrite: false,
+            force: false,
             files: true,
             dirs: true,
             includeParentDirs: true,
-            timestamp: Date.now()
+            timestamp: Date.now(),
         });
-        options.to = absolute(options.to, this.location);
+
+        options.to = api.abs(options.to, this.location);
+        api.mkdir(options.to);
 
         if (!options.on) {
             throw "No on defined";
         }
+        if (options.on.substr(0,1) === "/") options.on = options.on.substr(1);
 
         return this.stat.walk(this, options, function collateWalked(resolve, reject, stats) {
 
@@ -856,16 +1029,16 @@ class Selection extends Array {
                     return resolve(stats);
                 }
 
-                var relativeLocation = relative(item.location, this.location);
+                var relativeLocation = api.rel(item.location, this.location);
                 var lastIndexOccurance = relativeLocation.lastIndexOf(options.on);
                 if (lastIndexOccurance === -1) {
                     return next(false);
                 }
 
                 var truncated = relativeLocation.substr(relativeLocation.lastIndexOf(options.on)+options.on.length);
-                var toDestination = join( options.to, truncated );
+                var toDestination = api.join( options.to, truncated );
 
-                if (!options.forceOverwrite) {
+                if (!options.force) {
                     var existing = new Stat(toDestination);
                     if (existing.exists) {
                         var isNewer = (existing.mtime > item.mtime);
@@ -883,7 +1056,7 @@ class Selection extends Array {
 
                 if (item.isDir) {
 
-                    mkdir(toDestination, this.location);
+                    api.mkdir(toDestination, this.location);
                     return next();
 
                 } else if (options.sync || options.syncCopy) {
@@ -952,11 +1125,11 @@ class Selection extends Array {
     watch(callback, options) {
 
         if (!arguments.length) {
-            playWatch(this);
+            watch.play(this);
             return this;
         }
         
-        this.watches = this.watches || [];
+        this.watches = this.watches || new ASyncIterator();
 
         for (var i = 0, l = this.watches.length; i < l; i++) {
             if (this.watches[i].callback === callback) {
@@ -970,7 +1143,7 @@ class Selection extends Array {
             callback: callback
         });
 
-        registerWatch(this);
+        watch.register(this);
 
         return this;
 
@@ -979,7 +1152,7 @@ class Selection extends Array {
     pause(callback) {
 
         if (!callback) {
-            pauseWatch(this);
+            watch.pause(this);
             return this;
         }
 
@@ -1003,7 +1176,7 @@ class Selection extends Array {
         if (!this.watches) return this;
 
         if (!this.callback) {
-            unregisterWatch(this);
+            watch.unregister(this);
             this.watches = null;
             return this;
         }
@@ -1016,7 +1189,7 @@ class Selection extends Array {
         }
 
         if (!this.watches.length) {
-            unregisterWatch(this);
+            watch.unregister(this);
             this.watches = null;
             return this;
         }
@@ -1029,43 +1202,142 @@ class Selection extends Array {
 var api = function SelectionCreator(globs, location, pwd) { 
     return new Selection(globs, location, pwd); 
 };
+extend(api, {
 
-api.mkdir = mkdir;
-api.abs = absolute;
-api.rel = relative;
-api.home = home;
-api.cwd = cwd;
-api.norm = api.normalize = normalize;
-api.join = join;
-api.stat = getCreateStat;
+    posix: function posix(location) {
+        return location.replace(/\\/g, "/");
+    },
 
-api.stats = function(options) {
-    return (new Selection(options)).stats(options);
-};
-api.collate = function(options) {
-    return (new Selection(options)).collate(options);
-};
-api.copy = function(options) {
-    return (new Selection(options)).copy(options);
-};
-api.delete = function(options) {
-    return (new Selection(options)).delete(options);
-};
-api.watch = function(options, callback) {
-    if (!arguments.length) {
-        playWatch();
-        return;
+    mkdir: function mkdir(location, pwd) {
+
+        location = api.abs(location, pwd);
+
+        var parts = location.split("/");
+        for (var i = 0, l = parts.length; i < l; i++) {
+            var fullpath = parts.slice(0, i+1).join("/");
+            if (fs.existsSync(fullpath)) {
+                continue;
+            }
+            fs.mkdirSync(fullpath, 0o777);
+        }
+
+        return this;
+
+    },
+
+    abs: function abs(location, pwd) {
+        //translate relative paths to absolute paths
+
+        //if no location defined, assume cwd
+        pwd = api.norm(pwd || "");
+        switch (pwd) {
+            case ".": case "./":
+                pwd = api.cwd(); 
+        }
+
+        location = api.posix(location || "");
+        if (location === "") {
+            return pwd;
+        }
+        location = location + "";
+
+        var firstCharacter = location.substr(0,1);
+        var secondCharacter = location.substr(1,1);
+
+        //take into consideration the ~ home variable
+        if (firstCharacter === "~") {
+            location = api.join( api.home(), location.substr(1));
+        }
+
+        var firstCharacter = location.substr(0,1);
+        var secondCharacter = location.substr(1,1);
+        
+        //if path is absolute or contains windows drive separator
+        if (firstCharacter === "/" || secondCharacter === ":") {
+            return api.norm(location);
+        }
+        
+        //if path is not absolute
+        return api.join(pwd, location);
+
+    },
+
+    rel: function rel(location, pwd) {
+        location = api.abs(location);
+        pwd = api.abs(pwd);
+        var rel =  location.substr(pwd.length);
+        if (rel[0] === "/") rel = rel.substr(1);
+        return rel;
+    },
+
+    home: function home() {
+        var home = osenv.home();
+        return api.posix(home);
+    },
+
+    cwd: function cwd() {
+        var cwd = process.cwd();
+        return api.posix(cwd);
+    },
+
+    norm: function norm(location) {
+        return path.posix.normalize(api.posix(location));
+    },
+
+    join: function join() {
+        return path.posix.join.apply(path.posix.join, arguments);
+    },
+
+    stat: function stat(location, options) {
+
+        var stat = _CLM012.stats[location];
+
+        if (!stat) {
+            stat = _CLM012.stats[location] = new Stat(location);
+        } else {
+            stat.update(options);
+        }
+
+        return stat;
+
+    },
+
+    stats: function stats(options) {
+        return (new Selection(options)).stats(options);
+    },
+
+    collate: function collate(options) {
+        return (new Selection(options)).collate(options);
+    },
+
+    copy: function copy(options) {
+        return (new Selection(options)).copy(options);
+    },
+
+    delete: function deleteFiles(options) {
+        return (new Selection(options)).delete(options);
+    },
+
+    watch: function watch(options, callback) {
+        if (!arguments.length) {
+            watch.play();
+            return api;
+        }
+
+        return (new Selection(options)).watch(callback, options);
+    },
+
+    pause: function pause() {
+        watch.pause();
+        return api;
+    },
+
+    stop: function stop() {
+        watch.unregister();  
+        return api;
     }
 
-    return (new Selection(options)).watch(callback, options);
-};
-api.pause = function() {
-    pauseWatch();
-};
-api.stop = function() {
-    unregisterWatch();  
-};
+});
 
+var watch = new Watches();
 module.exports = api;
-
-//todo, watches, testing, errors

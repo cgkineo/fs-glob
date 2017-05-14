@@ -560,6 +560,8 @@ class Stats extends ASyncIterator {
 
 }
 
+var waitDuration = 2000;
+
 class Watches extends ASyncIterator {
 
     constructor() {
@@ -567,7 +569,7 @@ class Watches extends ASyncIterator {
 
         this.handle = null;
         this.inWatch = false;
-        this.onInterval = this.onInterval.bind(this);
+        this.onInterval = debounce(this.onInterval.bind(this), waitDuration);
 
     }
 
@@ -585,43 +587,42 @@ class Watches extends ASyncIterator {
             paused: false,
             changed: [],
             deleted: [],
-            added: []
-        };
-        item.trigger = debounce(function trigger() {
+            added: [],
+            watcher: fs.watch(selector.location, {recursive: true}, this.onInterval),
+            trigger: function trigger() {
 
-            this.inWatch = true;
-            clearInterval(this.parent.handle);
-            this.parent.handle = null;
+                this.inWatch = true;
+                this.watcher.close();
+                this.selector.watches.each(function(watch, nextWatch) {
 
-            this.selector.watches.each(function(watch, nextWatch) {
+                    if (!watch) {
+                        this.changed.length = 0;
+                        this.deleted.length = 0;
+                        this.added.length = 0;
+                        this.inWatch = false;
+                        this.watcher = fs.watch(this.selector.location, {recursive: true}, this.parent.onInterval);
+                        this.parent.onInterval();
+                        return;
+                    }
 
-                if (!watch) {
-                    this.changed.length = 0;
-                    this.deleted.length = 0;
-                    this.added.length = 0;
-                    return;
-                }
+                    watch.callback({
+                        changed: this.changed,
+                        delete: this.deleted,
+                        added: this.added
+                    });
 
-                watch.callback({
-                    changed: this.changed,
-                    delete: this.deleted,
-                    added: this.added
-                });
+                    nextWatch();
 
-                nextWatch();
+                }.bind(this));
 
-            }.bind(this));
-
-            if (!this.parent.handle) {
-                this.parent.handle = setInterval(this.parent.onInterval, 2000);
             }
-
-        }.bind(item), 3000);
+        };
+        item.trigger = debounce(item.trigger.bind(item), 17);
 
         this.push(item);
-
-        if (!this.handle && !this.inWatch) {
-            this.handle = setInterval(this.onInterval, 2000);
+        
+        if (!this.inWatch) {
+            this.onInterval();
         }
 
     }
@@ -629,6 +630,9 @@ class Watches extends ASyncIterator {
     unregister(selector) {
 
         if (!selector) {
+            for (var i = 0, l = this.length; i < l; i++) {
+                this[i].watcher.close();
+            }
             this.length = 0;
             clearInterval(this.handle);
             this.handle = null;
@@ -637,6 +641,7 @@ class Watches extends ASyncIterator {
 
         for (var i = 0, l = this.length; i < l; i++) {
             if (this[i].selector === selector) {
+                this[i].watcher.close();
                 this.splice(i,1);
                 if (this.length === 0) {
                     clearInterval(this.handle);
@@ -693,8 +698,8 @@ class Watches extends ASyncIterator {
     onInterval() {
 
         var options = {
-            sync: true,
-            updateStatOn: "Date.now() - 1500"
+            sync: false,
+            update: true
         };
 
         this.each(function(item, nextSelector) {

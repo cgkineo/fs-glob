@@ -1,5 +1,7 @@
 # fs-glob
 
-A collection of file system minimatch-style glob functions and file system utilities.
+File system and globbing utilities.
 
-[API](https://github.com/oliverfoster/fs-glob/wiki/API)
+Uses [osenv](https://github.com/npm/osenv), [minimatch](https://github.com/isaacs/minimatch), [handlebars](https://github.com/wycats/handlebars.js)
+
+[API Docs](https://github.com/oliverfoster/fs-glob/wiki/API)

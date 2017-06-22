@@ -7,7 +7,7 @@ var Stats = require("./lib/Stats");
 var Watch = require("./lib/Watch");
 var Watches = require("./lib/Watches");
 
-var api = function GlobsCreator(globs, location, pwd) { 
+var api = function GlobsCreator(globs, location, pwd) {
     return new Globs(globs, location, pwd); 
 };
 
@@ -33,6 +33,10 @@ util.extend(api, {
         return api(options).collate(options);
     },
 
+    move: function move(options) {
+        return api(options).move(options);
+    },
+
     copy: function copy(options) {
         return api(options).copy(options);
     },
@@ -43,6 +47,7 @@ util.extend(api, {
 
     watch: function watch(options, callback) {
         if (arguments.length < 2) {
+            throw "fs-glob.watch: requires at least 2 arguments";
             return undefined;
         }
 

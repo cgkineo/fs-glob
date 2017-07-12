@@ -24,6 +24,7 @@ util.extend(api, {
     norm: util.norm,
     join: util.join,
     stat: util.stat,
+    replace: util.replace,
 
     stats: function stats(options) {
         return api(options).stats(options);

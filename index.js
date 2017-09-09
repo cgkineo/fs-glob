@@ -6,6 +6,7 @@ var Stat = require("./lib/Stat");
 var Stats = require("./lib/Stats");
 var Watch = require("./lib/Watch");
 var Watches = require("./lib/Watches");
+var MATCH = require("./lib/MATCH");
 
 var api = function GlobsCreator(globs, location, pwd) {
     return new Globs(globs, location, pwd); 
@@ -13,6 +14,8 @@ var api = function GlobsCreator(globs, location, pwd) {
 
 util.extend(api, {
 
+    MATCH: MATCH,
+    
     watches: util.watches,
 
     posix: util.posix,
